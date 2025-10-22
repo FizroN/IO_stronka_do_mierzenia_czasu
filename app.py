@@ -7,12 +7,16 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timezone, timedelta
 
-# --- Definicje szablonów (aby wszystko było w 1 pliku) ---
+# NOWE IMPORTY
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func # Potrzebne do zliczania
 
-# Folder, w którym będą szablony
+# --- Definicje szablonów (z naszej wersji z Chart.js) ---
+# Pliki HTML, które stworzyliśmy, są poprawne dla tej logiki.
+
 TEMPLATE_DIR = 'templates'
 
-# Zawartość szablonu layout.html (baza) - bez zmian
+# Zawartość szablonu layout.html (z Chart.js)
 LAYOUT_HTML = """
 <!doctype html>
 <html lang="pl">
@@ -40,9 +44,7 @@ LAYOUT_HTML = """
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
         th { background-color: #f2f2f2; }
-        /* Styl dla kontenera wykresu */
         .chart-container { width: 100%; margin: 25px 0; }
-        /* Style dla filtrów raportu */
         .report-filters { display: flex; gap: 15px; margin-bottom: 20px; }
         .report-filters .form-group { flex: 1; margin-bottom: 0; }
     </style>
@@ -93,7 +95,8 @@ LOGIN_HTML = """
 {% endblock %}
 """
 
-# Zawartość szablonu dashboard.html (bez zmian)
+# Zawartość szablonu dashboard.html (logika ręcznego wpisu)
+# Zmieniona pętla for na obiekty
 DASHBOARD_HTML = """
 {% extends "layout.html" %}
 {% block content %}
@@ -121,8 +124,9 @@ DASHBOARD_HTML = """
             <label for="project_select">Wybierz istniejący projekt:</label>
             <select name="project_select" id="project_select">
                 <option value="">-- Wybierz --</option>
-                {% for project_name in projects %}
-                    <option value="{{ project_name }}">{{ project_name }}</option>
+                <!-- ZMIANA: Iterujemy po obiektach Project -->
+                {% for project in projects %}
+                    <option value="{{ project.name }}">{{ project.name }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -137,8 +141,7 @@ DASHBOARD_HTML = """
 {% endblock %}
 """
 
-# ZAKTUALIZOWANA Zawartość szablonu report.html
-# Logika dropdownów dla dat jest teraz dynamiczna
+# Zawartość szablonu report.html (z filtrami dynamicznymi)
 REPORT_HTML = """
 {% extends "layout.html" %}
 {% block content %}
@@ -149,6 +152,7 @@ REPORT_HTML = """
             <div class="form-group">
                 <label for="user_select">Użytkownik:</label>
                 <select name="user_id" id="user_select" class="form-control" onchange="this.form.submit()">
+                    <!-- ZMIANA: Iterujemy po obiektach User -->
                     {% for user in all_users %}
                         <option value="{{ user.id }}" {% if user.id == selected_user_id %}selected{% endif %}>
                             {{ user.name }} {{ user.surname }}
@@ -277,132 +281,79 @@ def create_templates():
     if not os.path.exists(TEMPLATE_DIR):
         os.makedirs(TEMPLATE_DIR)
         print(f"Utworzono katalog: {TEMPLATE_DIR}")
-
     templates_to_create = {
         'layout.html': LAYOUT_HTML,
         'login.html': LOGIN_HTML,
         'dashboard.html': DASHBOARD_HTML,
         'report.html': REPORT_HTML,
     }
-
     for filename, content in templates_to_create.items():
         filepath = os.path.join(TEMPLATE_DIR, filename)
-        # Zawsze nadpisuj plik report, aby wprowadzić zmiany
-        if not os.path.exists(filepath) or filename in ['report.html', 'layout.html']:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"Utworzono/Zaktualizowano plik szablonu: {filepath}")
+        # Zawsze nadpisuj pliki, aby pasowały do logiki
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+    print(f"Utworzono/Zaktualizowano pliki szablonów.")
 
-# --- Konfiguracja Aplikacji Flask ---
+# --- NOWA KONFIGURACJA: Flask + SQLAlchemy ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'bardzo-tajny-klucz-zmien-to-na-cos-innego'
+# Użyj pliku bazy danych w bieżącym katalogu
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///time_tracker.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# --- Konfiguracja Flask-Login ---
+db = SQLAlchemy(app)
+
+# --- Konfiguracja Flask-Login (bez zmian) ---
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Musisz się zalogować, aby zobaczyć tę stronę.'
 login_manager.login_message_category = 'error'
 
-# --- Logika Zarządzania plikami JSON (bez zmian) ---
 
-DATA_DIR = 'data'
-TIME_ENTRIES_DIR = os.path.join(DATA_DIR, 'time_entries')
-USERS_FILE = os.path.join(DATA_DIR, 'users.json')
-PROJECTS_FILE = os.path.join(DATA_DIR, 'projects.json')
+# --- NOWE MODELE BAZY DANYCH (z pliku SQLA) ---
+class User(db.Model, UserMixin):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(200), unique=True, nullable=False)
+    password_hash = db.Column(db.String(300), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    surname = db.Column(db.String(100), nullable=False)
+    role = db.Column(db.String(50), nullable=False, default='Pracownik')
 
-USERS_DB = {}
-PROJECTS_SET = set()
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
-def load_json(file_path, default_value):
-    if not os.path.exists(file_path):
-        return default_value
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        print(f"Błąd odczytu pliku {file_path}, zwracam wartość domyślną.")
-        return default_value
 
-def save_json(file_path, data):
-    try:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except IOError:
-        print(f"Błąd zapisu do pliku {file_path}")
+class Project(db.Model):
+    __tablename__ = 'projects'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False, unique=True) # Nazwa musi być unikalna
 
-def get_user_entries_path(user_id):
-    return os.path.join(TIME_ENTRIES_DIR, f"entries_user_{user_id}.json")
 
-def load_user_time_entries(user_id):
-    file_path = get_user_entries_path(user_id)
-    entries = load_json(file_path, [])
-    valid_entries = []
-    for entry in entries:
-        try:
-            entry['start_time'] = datetime.fromisoformat(entry['start_time_str'])
-            entry['end_time'] = datetime.fromisoformat(entry['end_time_str'])
-            valid_entries.append(entry)
-        except (ValueError, KeyError):
-            print(f"Pomijam błędny wpis czasu: {entry.get('id', '???')} dla użytkownika {user_id}")
-            continue
-    return valid_entries
-
-def save_user_time_entries(user_id, entries):
-    file_path = get_user_entries_path(user_id)
-    entries_to_save = []
-    for entry in entries:
-        entry_copy = entry.copy()
-        if 'start_time' in entry_copy and isinstance(entry_copy['start_time'], datetime):
-            entry_copy['start_time_str'] = entry_copy['start_time'].isoformat()
-        if 'end_time' in entry_copy and isinstance(entry_copy['end_time'], datetime):
-            entry_copy['end_time_str'] = entry_copy['end_time'].isoformat()
-        
-        entry_copy.pop('start_time', None)
-        entry_copy.pop('end_time', None)
-        entries_to_save.append(entry_copy)
-        
-    save_json(file_path, entries_to_save)
-
-# --- Model Użytkownika (bez zmian) ---
-class User(UserMixin):
-    def __init__(self, id, email, name, surname, role):
-        self.id = id
-        self.email = email
-        self.name = name
-        self.surname = surname
-        self.role = role
+class TimeEntry(db.Model):
+    __tablename__ = 'time_entries'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id'), nullable=False)
     
-    @staticmethod
-    def get(user_id):
-        user_data = USERS_DB.get(int(user_id))
-        if user_data:
-            return User(
-                id=user_data['id'],
-                email=user_data['email'],
-                name=user_data['name'],
-                surname=user_data['surname'],
-                role=user_data['role']
-            )
-        return None
+    # Przechowujemy jako UTC
+    start_time = db.Column(db.DateTime(timezone=True), nullable=False)
+    end_time = db.Column(db.DateTime(timezone=True), nullable=True) 
+    duration_sec = db.Column(db.Integer, nullable=True)
 
-    @staticmethod
-    def find_by_email(email):
-        for uid, udata in USERS_DB.items():
-            if udata['email'] == email:
-                return udata
-        return None
+    # Relacje - ułatwiają odpytywanie
+    user = db.relationship('User', backref=db.backref('time_entries', lazy=True))
+    project = db.relationship('Project', backref=db.backref('time_entries', lazy=True))
 
-    @staticmethod
-    def get_all_users():
-        users = []
-        for uid in USERS_DB.keys():
-            users.append(User.get(uid))
-        return sorted(users, key=lambda u: (u.surname, u.name))
 
+# --- NOWY User loader (z pliku SQLA) ---
 @login_manager.user_loader
 def load_user(user_id):
-    return User.get(user_id)
+    if not user_id:
+        return None
+    return User.query.get(int(user_id))
+
 
 # --- Funkcje pomocnicze (bez zmian) ---
 def format_duration(seconds):
@@ -415,13 +366,13 @@ def format_duration(seconds):
 
 # --- Trasy (Routes) ---
 
-# Trasy /login, /logout, /dashboard, /add_time_entry (bez zmian)
 @app.route('/')
 def index():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     return redirect(url_for('login'))
 
+# ZAKTUALIZOWANA trasa /login (logika JSON, zapytania SQLA)
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -430,12 +381,15 @@ def login():
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
-        user_data = User.find_by_email(email)
         
-        if user_data and check_password_hash(user_data['password_hash'], password):
-            user_obj = User.get(user_data['id'])
-            login_user(user_obj)
-            print(f"Użytkownik {user_obj.email} zalogowany.")
+        # Zapytanie SQLA
+        user = User.query.filter_by(email=email).first()
+        
+        # Użycie metody z modelu User
+        if user and user.check_password(password):
+            login_user(user)
+            session.clear() # Wyczyść sesję na wszelki wypadek
+            print(f"Użytkownik {user.email} zalogowany.")
             return redirect(url_for('dashboard'))
         else:
             flash('Nieprawidłowy e-mail lub hasło.', 'error')
@@ -451,19 +405,22 @@ def logout():
     flash('Zostałeś pomyślnie wylogowany.', 'success')
     return redirect(url_for('login'))
 
+# ZAKTUALIZOWANA trasa /dashboard
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    projects_list = sorted(list(PROJECTS_SET))
+    # Pobierz projekty z bazy danych
+    projects_list = Project.query.order_by(Project.name).all()
+    
     today_date = datetime.now().strftime('%Y-%m-%d')
     return render_template('dashboard.html', 
-                           projects=projects_list,
+                           projects=projects_list, # Przekaż obiekty Project
                            today_date=today_date)
 
+# ZAKTUALIZOWANA trasa /add_time_entry
 @app.route('/add_time_entry', methods=['POST'])
 @login_required
 def add_time_entry():
-    global PROJECTS_SET
     date_str = request.form.get('date')
     start_str = request.form.get('start_time')
     end_str = request.form.get('end_time')
@@ -473,11 +430,6 @@ def add_time_entry():
     project_name = ""
     if new_project:
         project_name = new_project
-        if new_project not in PROJECTS_SET:
-            PROJECTS_SET.add(new_project)
-            save_json(PROJECTS_FILE, list(PROJECTS_SET))
-            print(f"Dodano nowy projekt: {new_project} i zapisano do pliku.")
-            flash(f"Dodano nowy projekt do listy: {new_project}", 'success')
     elif existing_project:
         project_name = existing_project
     
@@ -485,6 +437,19 @@ def add_time_entry():
         flash("Musisz wybrać istniejący projekt lub dodać nowy.", 'error')
         return redirect(url_for('dashboard'))
 
+    # --- NOWA LOGIKA BAZY DANYCH ---
+    # 1. Znajdź lub stwórz projekt
+    project = Project.query.filter_by(name=project_name).first()
+    if not project:
+        project = Project(name=project_name)
+        db.session.add(project)
+        # Musimy zrobić flush(), aby uzyskać project.id dla TimeEntry
+        db.session.flush() 
+        print(f"Dodano nowy projekt: {project_name} do bazy danych.")
+        flash(f"Dodano nowy projekt do listy: {project_name}", 'success')
+    # --- KONIEC NOWEJ LOGIKI ---
+
+    # Parsowanie czasu (bez zmian)
     try:
         start_naive = datetime.fromisoformat(f"{date_str}T{start_str}")
         end_naive = datetime.fromisoformat(f"{date_str}T{end_str}")
@@ -502,29 +467,31 @@ def add_time_entry():
         flash("Nieprawidłowy format daty lub godziny.", 'error')
         return redirect(url_for('dashboard'))
 
-    user_entries = load_user_time_entries(current_user.id)
-    new_entry = {
-        "id": len(user_entries) + 1,
-        "user_id": current_user.id,
-        "project_name": project_name,
-        "start_time": start_utc,
-        "end_time": end_utc,
-        "duration_sec": duration_sec
-    }
-    user_entries.append(new_entry)
-    save_user_time_entries(current_user.id, user_entries)
+    # --- NOWA LOGIKA BAZY DANYCH ---
+    # 2. Stwórz nowy wpis czasu z project.id
+    new_entry = TimeEntry(
+        user_id=current_user.id,
+        project_id=project.id, # Użyj ID z obiektu Project
+        start_time=start_utc,
+        end_time=end_utc,
+        duration_sec=duration_sec
+    )
+    db.session.add(new_entry)
+    db.session.commit() # Zapisz wszystko w bazie
+    # --- KONIEC NOWEJ LOGIKI ---
 
-    print(f"Dodano wpis {new_entry['id']} dla {current_user.email} i zapisano w pliku.")
+    print(f"Dodano wpis dla {current_user.email} i zapisano w bazie.")
     flash(f"Pomyślnie dodano wpis czasu pracy ({format_duration(duration_sec)}).", 'success')
     return redirect(url_for('dashboard'))
 
 
-# ZNACZĄCO ZAKTUALIZOWANA trasa /report
+# ZNACZĄCO ZAKTUALIZOWANA trasa /report (logika JSON, zapytania SQLA)
 @app.route('/report')
 @login_required
 def report():
     # --- 0. Przygotowanie wstępne ---
-    all_users = User.get_all_users()
+    # Pobierz wszystkich użytkowników z bazy
+    all_users = User.query.order_by(User.surname, User.name).all()
     today = datetime.now().date()
     month_names = ["", "Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec", 
                    "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"]
@@ -535,21 +502,22 @@ def report():
     except ValueError:
         selected_user_id = current_user.id
 
-    report_user_data = USERS_DB.get(selected_user_id)
-    if not report_user_data:
+    # Pobierz obiekt User z bazy
+    report_user = User.query.get(selected_user_id)
+    if not report_user:
         flash("Nie znaleziono takiego użytkownika.", 'error')
         return redirect(url_for('report'))
 
     # --- 2. Wczytanie WSZYSTKICH danych użytkownika i budowa dynamicznych filtrów ---
-    all_user_entries = load_user_time_entries(selected_user_id)
+    # Zapytanie do bazy o wszystkie wpisy użytkownika
+    all_user_entries = TimeEntry.query.filter_by(user_id=selected_user_id).all()
     
     available_years_set = set()
-    # Słownik: { 2025: {10, 11}, 2024: {12} }
     available_months_by_year = {} 
     
     for entry in all_user_entries:
-        # Używamy czasu lokalnego do określenia roku/miesiąca
-        start_local = entry['start_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
+        # Użyj atrybutu obiektu
+        start_local = entry.start_time.replace(tzinfo=timezone.utc).astimezone(tz=None)
         year = start_local.year
         month = start_local.month
         
@@ -559,111 +527,96 @@ def report():
         available_months_by_year[year].add(month)
 
     # --- 3. Ustalenie wybranego ROKU ---
-    
-    # Sortuj lata (najnowsze pierwsze), lub użyj bieżącego roku, jeśli brak danych
     if not available_years_set:
         available_years = [today.year]
     else:
         available_years = sorted(list(available_years_set), reverse=True)
 
-    # Weź rok z URL, domyślnie 0
     try:
         selected_year = int(request.args.get('year', 0))
     except ValueError:
         selected_year = 0
     
-    # Jeśli rok z URL jest nieprawidłowy (lub 0), wybierz najnowszy dostępny
     if selected_year not in available_years:
         selected_year = available_years[0]
 
-    # --- 4. Ustalenie wybranego MIESIĄCA (na podstawie wybranego roku) ---
-    
-    # Pobierz dostępne miesiące dla wybranego roku
+    # --- 4. Ustalenie wybranego MIESIĄCA ---
     months_set_for_year = available_months_by_year.get(selected_year, set())
     
     if not months_set_for_year:
-        # Jeśli brak danych, użyj bieżącego miesiąca
         available_months = [(today.month, month_names[today.month])]
     else:
-        # Zbuduj listę krotek (numer, nazwa) i posortuj (najnowsze pierwsze)
         available_months = sorted(
             [(m_num, month_names[m_num]) for m_num in months_set_for_year],
             key=lambda x: x[0],
             reverse=True 
         )
 
-    # Weź miesiąc z URL, domyślnie 0
     try:
         selected_month = int(request.args.get('month', 0))
     except ValueError:
         selected_month = 0
 
-    # Jeśli miesiąc z URL jest nieprawidłowy (lub 0), wybierz najnowszy dostępny
     available_month_nums = [m[0] for m in available_months]
     if selected_month not in available_month_nums:
         selected_month = available_month_nums[0]
 
-    # --- 5. Przygotowanie osi X dla wykresu (cały wybrany miesiąc) ---
+    # --- 5. Przygotowanie osi X dla wykresu ---
     try:
         num_days_in_month = calendar.monthrange(selected_year, selected_month)[1]
     except calendar.IllegalMonthError:
-        num_days_in_month = 30 # Fallback
+        num_days_in_month = 30 
 
     first_day_of_month = datetime(selected_year, selected_month, 1).date()
-    date_labels = [] # Etykiety dla osi X (np. "Oct 01")
-    date_keys = []   # Klucze do wyszukiwania danych (np. "2025-10-01")
+    date_labels = [] 
+    date_keys = []   
     
     for i in range(num_days_in_month):
         current_day = first_day_of_month + timedelta(days=i)
         date_labels.append(current_day.strftime('%b %d'))
         date_keys.append(current_day.strftime('%Y-%m-%d'))
 
-    # --- 6. Filtrowanie danych i agregacja (Tabela i Wykres) ---
+    # --- 6. Filtrowanie danych i agregacja ---
+    user_entries_formatted = [] 
+    total_month_sec = 0         
+    daily_project_summary = {}  
+    all_projects_in_month = set() 
     
-    user_entries_formatted = [] # Do tabeli
-    total_month_sec = 0         # Do sumy w tabeli
-    daily_project_summary = {}  # Do wykresu
-    all_projects_in_month = set() # Do wykresu
-    
-    # Iterujemy po wczytanych wcześniej `all_user_entries`
     for entry in all_user_entries:
-        start_local = entry['start_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
+        start_local = entry.start_time.replace(tzinfo=timezone.utc).astimezone(tz=None)
         
-        # GŁÓWNY FILTR: Sprawdź, czy wpis pasuje do wybranego ROKU i MIESIĄCA
         if start_local.year == selected_year and start_local.month == selected_month:
+            # Użyj relacji, aby pobrać nazwę projektu
+            project_name = entry.project.name if entry.project else "Nieznany Projekt"
             
-            # --- Logika dla Tabeli ---
-            total_month_sec += entry['duration_sec']
-            end_local = entry['end_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
+            # Logika dla Tabeli
+            total_month_sec += entry.duration_sec
+            end_local = entry.end_time.replace(tzinfo=timezone.utc).astimezone(tz=None)
             
             formatted_entry = {
-                'project_name': entry.get('project_name', 'Nieznany'),
+                'project_name': project_name,
                 'date': start_local.strftime('%Y-%m-%d'),
                 'start': start_local.strftime('%H:%M:%S'),
                 'end': end_local.strftime('%H:%M:%S'),
-                'duration': format_duration(entry['duration_sec'])
+                'duration': format_duration(entry.duration_sec)
             }
             user_entries_formatted.append(formatted_entry)
             
-            # --- Logika dla Wykresu ---
+            # Logika dla Wykresu
             local_date_str = start_local.strftime('%Y-%m-%d')
-            project = entry['project_name']
-            duration = entry['duration_sec']
-            
-            all_projects_in_month.add(project)
+            all_projects_in_month.add(project_name)
             
             if local_date_str not in daily_project_summary:
                 daily_project_summary[local_date_str] = {}
-            if project not in daily_project_summary[local_date_str]:
-                daily_project_summary[local_date_str][project] = 0
+            if project_name not in daily_project_summary[local_date_str]:
+                daily_project_summary[local_date_str][project_name] = 0
                 
-            daily_project_summary[local_date_str][project] += duration
+            daily_project_summary[local_date_str][project_name] += entry.duration_sec
 
     # --- 7. Przygotowanie finalnych danych do przekazania ---
-    
     report_data = {
-        'user_name': report_user_data['name'],
-        'user_surname': report_user_data['surname'],
+        'user_name': report_user.name, # Użyj obiektu User
+        'user_surname': report_user.surname, # Użyj obiektu User
         'entries': sorted(user_entries_formatted, key=lambda x: (x['date'], x['start']), reverse=True),
         'total_in_month': format_duration(total_month_sec)
     }
@@ -708,45 +661,58 @@ def report():
 def _jinja_format_duration(seconds):
     return format_duration(seconds)
 
-# --- Funkcja Inicjalizująca Dane (bez zmian) ---
-def initialize_data_files():
-    global USERS_DB, PROJECTS_SET
-    
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.makedirs(TIME_ENTRIES_DIR, exist_ok=True)
-    
-    loaded_users = load_json(USERS_FILE, {})
-    if loaded_users:
-        USERS_DB = {int(k): v for k, v in loaded_users.items()}
-    else:
-        print("Tworzenie domyślnego pliku users.json...")
-        USERS_DB = {
-            1: { "id": 1, "email": "mateusz.wator@timemasters.pl", "password_hash": generate_password_hash("superhaslo123", method="pbkdf2:sha256"), "name": "Mateusz", "surname": "Wątor", "role": "Pracownik" },
-            2: { "id": 2, "email": "jakub.zak@timemasters.pl", "password_hash": generate_password_hash("haslo456", method="pbkdf2:sha256"), "name": "Jakub", "surname": "Żak", "role": "Pracownik" }
-        }
-        save_json(USERS_FILE, USERS_DB)
-    
-    loaded_projects = load_json(PROJECTS_FILE, None)
-    if loaded_projects is not None:
-        PROJECTS_SET = set(loaded_projects)
-    else:
-        print("Tworzenie domyślnego pliku projects.json...")
-        PROJECTS_SET = {"Projekt Alfa", "Projekt Delta", "Zadania Wewnętrzne"}
-        save_json(PROJECTS_FILE, list(PROJECTS_SET))
-    
-    print(f"Gotowe. Załadowano {len(USERS_DB)} użytkowników i {len(PROJECTS_SET)} projektów z plików.")
+# --- NOWA Funkcja Inicjalizująca Bazę Danych ---
+def init_db_and_seed():
+    db.create_all()
+
+    # Seed projects
+    if Project.query.count() == 0:
+        defaults = [
+            Project(name="Projekt Alfa"),
+            Project(name="Projekt Delta"),
+            Project(name="Zadania Wewnętrzne")
+        ]
+        db.session.add_all(defaults)
+        db.session.commit()
+        print("Zainicjowano domyślne projekty w bazie danych.")
+
+    # Seed users
+    if User.query.count() == 0:
+        u1 = User(
+            email="mateusz.wator@timemasters.pl",
+            password_hash=generate_password_hash("superhaslo123", method="pbkdf2:sha256"),
+            name="Mateusz",
+            surname="Wątor",
+            role="Pracownik"
+        )
+        u2 = User(
+            email="jakub.zak@timemasters.pl",
+            password_hash=generate_password_hash("haslo456", method="pbkdf2:sha256"),
+            name="Jakub",
+            surname="Żak",
+            role="Pracownik"
+        )
+        db.session.add_all([u1, u2])
+        db.session.commit()
+        print("Zainicjowano domyślnych użytkowników w bazie danych.")
 
 
-# --- Uruchomienie aplikacji ---
+# --- ZAKTUALIZOWANE Uruchomienie aplikacji ---
 if __name__ == '__main__':
-    create_templates()
-    initialize_data_files()
+    # Użyj kontekstu aplikacji do operacji na bazie danych
+    with app.app_context():
+        # 1. Utwórz pliki HTML
+        create_templates()
+        # 2. Utwórz tabele bazy danych i dodaj domyślne dane
+        init_db_and_seed()
     
     print("="*50)
     print("Aplikacja Time Tracker jest gotowa.")
-    print("ZAKTUALIZOWANO: Filtry dat w raporcie są teraz dynamiczne (na podstawie danych).")
-    print("Plik szablonu 'report.html' został zaktualizowany.")
+    print("ZAKTUALIZOWANO: Aplikacja używa teraz bazy danych SQLite (time_tracker.db).")
+    print("Funkcjonalność: Ręczne wpisywanie czasu i dynamiczne raporty.")
     print("Uruchamianie serwera Flask pod adresem: http://127.0.0.1:5000")
     print("="*50)
     
+    # 3. Uruchom aplikację
+    # (Usuwamy podwójne wywołanie app.run() z pliku SQLA)
     app.run(debug=True)

@@ -25,8 +25,9 @@
             <label for="project_select">Wybierz istniejący projekt:</label>
             <select name="project_select" id="project_select">
                 <option value="">-- Wybierz --</option>
-                {% for project_name in projects %}
-                    <option value="{{ project_name }}">{{ project_name }}</option>
+                <!-- ZMIANA: Iterujemy po obiektach Project -->
+                {% for project in projects %}
+                    <option value="{{ project.name }}">{{ project.name }}</option>
                 {% endfor %}
             </select>
         </div>
