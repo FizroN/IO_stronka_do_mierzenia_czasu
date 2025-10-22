@@ -1,16 +1,14 @@
+# app.py
 import os
-import time
+from datetime import datetime, timezone
 from flask import Flask, render_template, redirect, url_for, request, flash, session
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timezone
+from flask_sqlalchemy import SQLAlchemy
 
-# --- Definicje szablonów (aby wszystko było w 1 pliku) ---
-
-# Folder, w którym będą szablony
+# --- Templates (the exact strings you provided earlier) ---
 TEMPLATE_DIR = 'templates'
 
-# Zawartość szablonu layout.html (baza)
 LAYOUT_HTML = """
 <!doctype html>
 <html lang="pl">
@@ -51,7 +49,7 @@ LAYOUT_HTML = """
                 <a href="{{ url_for('login') }}" style="float: right;">Zaloguj</a>
             {% endif %}
         </nav>
-        
+
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             {% for category, message in messages %}
@@ -66,7 +64,6 @@ LAYOUT_HTML = """
 </html>
 """
 
-# Zawartość szablonu login.html
 LOGIN_HTML = """
 {% extends "layout.html" %}
 {% block content %}
@@ -85,12 +82,11 @@ LOGIN_HTML = """
 {% endblock %}
 """
 
-# Zawartość szablonu dashboard.html
 DASHBOARD_HTML = """
 {% extends "layout.html" %}
 {% block content %}
     <h2>Dashboard</h2>
-    
+
     {% if active_project_name %}
         <div class="flash success">
             Obecnie pracujesz nad: <strong>{{ active_project_name }}</strong> (od {{ active_start_time.strftime('%H:%M:%S') }})
@@ -123,7 +119,6 @@ DASHBOARD_HTML = """
 {% endblock %}
 """
 
-# Zawartość szablonu report.html
 REPORT_HTML = """
 {% extends "layout.html" %}
 {% block content %}
@@ -163,135 +158,103 @@ REPORT_HTML = """
 {% endblock %}
 """
 
-# Funkcja do tworzenia plików szablonów
+
 def create_templates():
     if not os.path.exists(TEMPLATE_DIR):
         os.makedirs(TEMPLATE_DIR)
-        print(f"Utworzono katalog: {TEMPLATE_DIR}")
-
     templates_to_create = {
         'layout.html': LAYOUT_HTML,
         'login.html': LOGIN_HTML,
         'dashboard.html': DASHBOARD_HTML,
         'report.html': REPORT_HTML,
     }
-
     for filename, content in templates_to_create.items():
         filepath = os.path.join(TEMPLATE_DIR, filename)
-        if not os.path.exists(filepath):
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"Utworzono plik szablonu: {filepath}")
+        # Overwrite to ensure templates match code
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
 
-# --- Konfiguracja Aplikacji Flask ---
+
+# --- Flask + SQLAlchemy config ---
 app = Flask(__name__)
-# Klucz jest wymagany do sesji i flash messages
 app.config['SECRET_KEY'] = 'bardzo-tajny-klucz-zmien-to-na-cos-innego'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///time_tracker.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# --- Konfiguracja Flask-Login ---
+db = SQLAlchemy(app)
+
+# --- Flask-Login setup ---
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login' # Gdzie przekierować niezalogowanych [cite: 6]
+login_manager.login_view = 'login'
 login_manager.login_message = 'Musisz się zalogować, aby zobaczyć tę stronę.'
 login_manager.login_message_category = 'error'
 
 
-# --- Hardcoded Baza Danych (zgodnie z prośbą i dokumentacją) ---
+# --- Models ---
+class User(db.Model, UserMixin):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(200), unique=True, nullable=False)
+    password_hash = db.Column(db.String(300), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    surname = db.Column(db.String(100), nullable=False)
+    role = db.Column(db.String(50), nullable=False, default='Pracownik')
 
-# Użytkownicy [cite: 2, 6, 9]
-# Hasło dla 'mateusz.wator' to 'superhaslo123'
-# Hasło dla 'jakub.zak' to 'haslo456'
-USERS_DB = {
-    1: {
-        "id": 1,
-        "email": "mateusz.wator@timemasters.pl",
-        "password_hash": generate_password_hash("superhaslo123", method="pbkdf2:sha256"), # [cite: 6]
-        "name": "Mateusz",
-        "surname": "Wątor",
-        "role": "Pracownik"
-    },
-    2: {
-        "id": 2,
-        "email": "jakub.zak@timemasters.pl",
-        "password_hash": generate_password_hash("haslo456", method="pbkdf2:sha256"), # [cite: 6]
-        "name": "Jakub",
-        "surname": "Żak",
-        "role": "Pracownik"
-    }
-}
-
-# Projekty [cite: 43]
-PROJECTS_DB = {
-    1: {"name": "Projekt Alfa"},
-    2: {"name": "Projekt Delta"},
-    3: {"name": "Zadania Wewnętrzne"}
-}
-
-# Wpisy czasu pracy (Time Entries) [cite: 9, 31, 97]
-# Użyjemy listy, aby symulować bazę danych
-TIME_ENTRIES_DB = []
-_next_time_entry_id = 1 # Symulacja auto-inkrementacji ID
-
-# Aktywne sesje pracy (kto nad czym teraz pracuje) [cite: 7]
-# mapowanie: user_id -> time_entry_id
-# Zmieniamy na przechowywanie w sesji Flask, aby działało dla wielu użytkowników
-# Zamiast globalnego dict, użyjemy `session['active_entry_id']`
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
 
-# --- Model Użytkownika dla Flask-Login ---
-class User(UserMixin):
-    def __init__(self, id, email, name, surname, role):
-        self.id = id
-        self.email = email
-        self.name = name
-        self.surname = surname
-        self.role = role
-    
-    @staticmethod
-    def get(user_id):
-        user_data = USERS_DB.get(int(user_id))
-        if user_data:
-            return User(
-                id=user_data['id'],
-                email=user_data['email'],
-                name=user_data['name'],
-                surname=user_data['surname'],
-                role=user_data['role']
-            )
-        return None
+class Project(db.Model):
+    __tablename__ = 'projects'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
 
+
+class TimeEntry(db.Model):
+    __tablename__ = 'time_entries'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id'), nullable=False)
+    start_time = db.Column(db.DateTime(timezone=True), nullable=False)
+    end_time = db.Column(db.DateTime(timezone=True), nullable=True)
+    duration_sec = db.Column(db.Integer, nullable=True)
+
+    user = db.relationship('User', backref='time_entries')
+    project = db.relationship('Project')
+
+
+# --- User loader ---
 @login_manager.user_loader
 def load_user(user_id):
-    return User.get(user_id)
+    if not user_id:
+        return None
+    return User.query.get(int(user_id))
 
-# --- Funkcje pomocnicze ---
 
+# --- Helpers (DB-backed) ---
 def get_active_session_entry(user_id):
-    """Pobiera aktywny (niezakończony) wpis czasu dla użytkownika."""
-    active_entry_id = session.get('active_entry_id')
-    if active_entry_id:
-        for entry in TIME_ENTRIES_DB:
-            # Sprawdza ID, czy należy do usera i czy nie jest zakończony
-            if entry['id'] == active_entry_id and \
-               entry['user_id'] == user_id and \
-               entry['end_time'] is None:
-                return entry
-    return None
+    return TimeEntry.query.filter_by(user_id=user_id, end_time=None).first()
+
 
 def stop_active_session(user_id):
-    """Zatrzymuje aktywną sesję pracy dla użytkownika."""
-    active_entry = get_active_session_entry(user_id)
-    if active_entry:
-        active_entry['end_time'] = datetime.now(timezone.utc)
-        duration = active_entry['end_time'] - active_entry['start_time']
-        active_entry['duration_sec'] = int(duration.total_seconds()) # [cite: 33]
-        session.pop('active_entry_id', None) # Usuń z sesji
-        print(f"Zatrzymano sesję {active_entry['id']} dla użytkownika {user_id}")
+    entry = get_active_session_entry(user_id)
+    if entry:
+        # ✅ Fix old naive datetimes (important!)
+        if entry.start_time.tzinfo is None:
+            entry.start_time = entry.start_time.replace(tzinfo=timezone.utc)
+
+        entry.end_time = datetime.now(timezone.utc)
+        duration = entry.end_time - entry.start_time
+        entry.duration_sec = int(duration.total_seconds())
+        db.session.commit()
+        session.pop('active_entry_id', None)
+        print(f"Stopped session {entry.id} for user {user_id}")
         return True
     return False
 
+
 def format_duration(seconds):
-    """Formatuje sekundy do czytelnego formatu H:M:S."""
     if seconds is None:
         return "W trakcie"
     hours, remainder = divmod(seconds, 3600)
@@ -299,52 +262,45 @@ def format_duration(seconds):
     return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
 
 
-# --- Trasy (Routes) ---
-
+# --- Routes ---
 @app.route('/')
 def index():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     return redirect(url_for('login'))
 
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
-    
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
-        
-        # Wyszukiwanie użytkownika po emailu [cite: 6, 88]
-        user_data = None
-        for uid, udata in USERS_DB.items():
-            if udata['email'] == email:
-                user_data = udata
-                break
-        
-        # Weryfikacja hasła [cite: 6, 89]
-        if user_data and check_password_hash(user_data['password_hash'], password):
-            user_obj = User.get(user_data['id'])
-            login_user(user_obj)
-            session.pop('active_entry_id', None) # Wyczyść stan sesji po zalogowaniu
-            print(f"Użytkownik {user_obj.email} zalogowany.")
+        user = User.query.filter_by(email=email).first()
+        if user and user.check_password(password):
+            login_user(user)
+            active = get_active_session_entry(user.id)
+            if active:
+                session['active_entry_id'] = active.id
+            else:
+                session.pop('active_entry_id', None)
+            print(f"User {user.email} logged in.")
             return redirect(url_for('dashboard'))
         else:
             flash('Nieprawidłowy e-mail lub hasło.', 'error')
-
     return render_template('login.html')
+
 
 @app.route('/logout')
 @login_required
 def logout():
-    # Zatrzymaj pracę przy wylogowaniu! [cite: 72]
     stop_active_session(current_user.id)
     logout_user()
-    session.clear() # Wyczyść całą sesję
-    print("Użytkownik wylogowany.")
+    session.clear()
     flash('Zostałeś pomyślnie wylogowany.', 'success')
     return redirect(url_for('login'))
+
 
 @app.route('/dashboard')
 @login_required
@@ -353,124 +309,152 @@ def dashboard():
     active_project_name = None
     active_start_time = None
     if active_entry:
-        active_project_name = PROJECTS_DB.get(active_entry['project_id'], {}).get('name', 'Nieznany Projekt')
-        active_start_time = active_entry['start_time'].replace(tzinfo=timezone.utc).astimezone(tz=None) # Konwersja na czas lokalny
-        
-    return render_template('dashboard.html', 
-                           projects=PROJECTS_DB, 
+        active_project_name = active_entry.project.name if active_entry.project else 'Nieznany Projekt'
+        active_start_time = active_entry.start_time.astimezone().replace(tzinfo=None)
+        session['active_entry_id'] = active_entry.id
+    else:
+        session.pop('active_entry_id', None)
+
+    projects_q = Project.query.all()
+    # convert to dict like previous code expected (id -> project object)
+    projects = {p.id: p for p in projects_q}
+
+    return render_template('dashboard.html',
+                           projects=projects,
                            active_project_name=active_project_name,
                            active_start_time=active_start_time)
+
 
 @app.route('/start_work', methods=['POST'])
 @login_required
 def start_work():
-    # To obsługuje "Clock In" [cite: 23, 54] i "Switch Project" [cite: 24, 66]
-    global _next_time_entry_id
     project_id = request.form.get('project_id')
     if not project_id:
         flash("Musisz wybrać projekt.", 'error')
         return redirect(url_for('dashboard'))
-
     project_id = int(project_id)
-    project_name = PROJECTS_DB.get(project_id, {}).get('name', 'Nieznany')
-    
-    # Zgodnie z logiką[cite: 7]: rozpoczęcie innego kończy poprzedni.
+    project = Project.query.get(project_id)
+    project_name = project.name if project else 'Nieznany'
+
     if stop_active_session(current_user.id):
-        flash(f"Zakończono pracę nad poprzednim projektem.", 'success')
+        flash("Zakończono pracę nad poprzednim projektem.", 'success')
 
-    # Rozpocznij nową sesję [cite: 61, 62]
-    new_entry = {
-        "id": _next_time_entry_id,
-        "user_id": current_user.id,
-        "project_id": project_id,
-        "start_time": datetime.now(timezone.utc), # [cite: 9]
-        "end_time": None, # [cite: 9]
-        "duration_sec": None # [cite: 33]
-    }
-    TIME_ENTRIES_DB.append(new_entry)
-    session['active_entry_id'] = new_entry['id'] # Zapisz w sesji
-    _next_time_entry_id += 1
+    new_entry = TimeEntry(
+        user_id=current_user.id,
+        project_id=project_id,
+        start_time=datetime.now(timezone.utc),
+        end_time=None,
+        duration_sec=None
+    )
+    db.session.add(new_entry)
+    db.session.commit()
+    session['active_entry_id'] = new_entry.id
 
-    print(f"Rozpoczęto sesję {new_entry['id']} dla użytkownika {current_user.id} na projekcie {project_id}")
     flash(f"Rozpocząłeś pracę nad projektem: {project_name}", 'success')
-
     return redirect(url_for('dashboard'))
+
 
 @app.route('/stop_work', methods=['POST'])
 @login_required
 def stop_work():
-    # To obsługuje "Stop Working" [cite: 25, 72, 74]
     if stop_active_session(current_user.id):
         flash("Zatrzymałeś pracę.", 'success')
     else:
         flash("Nie pracowałeś nad żadnym projektem.", 'error')
-        
     return redirect(url_for('dashboard'))
+
 
 @app.route('/report')
 @login_required
 def report():
-    # Generowanie raportu on-demand [cite: 6, 20, 98]
     user_entries = []
     total_today_sec = 0
-    today = datetime.now(timezone.utc).date()
+    today_local_date = datetime.now(timezone.utc).astimezone().date()
 
-    for entry in TIME_ENTRIES_DB:
-        if entry['user_id'] == current_user.id:
-            project_name = PROJECTS_DB.get(entry['project_id'], {}).get('name', 'Nieznany')
-            
-            # Konwersja czasów UTC na lokalne dla wyświetlenia
-            start_local = entry['start_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
-            
-            if entry['end_time']:
-                end_local = entry['end_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
-                end_str = end_local.strftime('%H:%M:%S')
-            else:
-                end_str = "W trakcie"
+    entries = TimeEntry.query.filter_by(user_id=current_user.id).order_by(TimeEntry.start_time.desc()).all()
+    for entry in entries:
+        project_name = entry.project.name if entry.project else 'Nieznany'
+        start_local = entry.start_time.astimezone()
+        if entry.end_time:
+            end_local = entry.end_time.astimezone()
+            end_str = end_local.strftime('%H:%M:%S')
+        else:
+            end_str = "W trakcie"
 
-            # Sumowanie czasu pracy z dzisiaj
-            if entry['duration_sec'] and start_local.date() == today:
-                 total_today_sec += entry['duration_sec']
-            
-            # Formatowanie na potrzeby raportu
-            formatted_entry = {
-                'project_name': project_name,
-                'date': start_local.strftime('%Y-%m-%d'),
-                'start': start_local.strftime('%H:%M:%S'),
-                'end': end_str,
-                'duration': format_duration(entry['duration_sec'])
-            }
-            user_entries.append(formatted_entry)
-    
-    # Dane użytkownika do raportu [cite: 6, 21]
+        if entry.duration_sec is not None and start_local.date() == today_local_date:
+            total_today_sec += entry.duration_sec
+
+        formatted_entry = {
+            'project_name': project_name,
+            'date': start_local.strftime('%Y-%m-%d'),
+            'start': start_local.strftime('%H:%M:%S'),
+            'end': end_str,
+            'duration': format_duration(entry.duration_sec)
+        }
+        user_entries.append(formatted_entry)
+
     report_data = {
         'user_name': current_user.name,
         'user_surname': current_user.surname,
-        'entries': sorted(user_entries, key=lambda x: (x['date'], x['start']), reverse=True), # Sortuj od najnowszych
-        'total_today': format_duration(total_today_sec) # [cite: 76]
+        'entries': user_entries,
+        'total_today': format_duration(total_today_sec)
     }
-    
     return render_template('report.html', report_data=report_data)
 
-# Dodanie filtra Jinja2 do szablonów
+
 @app.template_filter('format_duration')
 def _jinja_format_duration(seconds):
     return format_duration(seconds)
 
-# --- Uruchomienie aplikacji ---
-if __name__ == '__main__':
-    # Utwórz szablony przed uruchomieniem serwera
-    create_templates()
-    
-    print("="*50)
-    print("Aplikacja Time Tracker jest gotowa.")
-    print("Utworzono pliki szablonów w folderze 'templates'.")
+
+# --- DB initialization & seed ---
+def init_db_and_seed():
+    db.create_all()
+
+    # seed projects
+    if Project.query.count() == 0:
+        defaults = [
+            Project(name="Projekt Alfa"),
+            Project(name="Projekt Delta"),
+            Project(name="Zadania Wewnętrzne")
+        ]
+        db.session.add_all(defaults)
+        db.session.commit()
+        print("Seeded default projects.")
+
+    # seed users
+    if User.query.count() == 0:
+        u1 = User(
+            email="mateusz.wator@timemasters.pl",
+            password_hash=generate_password_hash("superhaslo123", method="pbkdf2:sha256"),
+            name="Mateusz",
+            surname="Wątor",
+            role="Pracownik"
+        )
+        u2 = User(
+            email="jakub.zak@timemasters.pl",
+            password_hash=generate_password_hash("haslo456", method="pbkdf2:sha256"),
+            name="Jakub",
+            surname="Żak",
+            role="Pracownik"
+        )
+        db.session.add_all([u1, u2])
+        db.session.commit()
+        print("Seeded default users.")
+
+
+# --- Run ---
+if __name__ == "__main__":
+    with app.app_context():  # ✅ This ensures a proper Flask context
+        init_db_and_seed()
+    app.run(debug=True)
+
+    print("=" * 50)
+    print("Aplikacja Time Tracker (z SQLite + SQLAlchemy) jest gotowa.")
     print("Uruchamianie serwera Flask pod adresem: http://127.0.0.1:5000")
-    print("Aby się zalogować, użyj:")
-    print("  Email: mateusz.wator@timemasters.pl")
-    print("  Hasło: superhaslo123")
-    print("Naciśnij CTRL+C aby zatrzymać serwer.")
-    print("="*50)
-    
-    # Uruchom aplikację
+    print("Przykładowe loginy:")
+    print("  Email: mateusz.wator@timemasters.pl  Password: superhaslo123")
+    print("  Email: jakub.zak@timemasters.pl       Password: haslo456")
+    print("=" * 50)
+
     app.run(debug=True)

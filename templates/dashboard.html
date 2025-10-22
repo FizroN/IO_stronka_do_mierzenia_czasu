@@ -2,7 +2,7 @@
 {% extends "layout.html" %}
 {% block content %}
     <h2>Dashboard</h2>
-    
+
     {% if active_project_name %}
         <div class="flash success">
             Obecnie pracujesz nad: <strong>{{ active_project_name }}</strong> (od {{ active_start_time.strftime('%H:%M:%S') }})
