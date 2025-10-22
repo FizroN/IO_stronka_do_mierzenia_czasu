@@ -1,0 +1,131 @@
+
+{% extends "layout.html" %}
+{% block content %}
+    <h2>Raport czasu pracy</h2>
+
+    <form method="GET" action="{{ url_for('report') }}">
+        <div class="report-filters">
+            <div class="form-group">
+                <label for="user_select">Użytkownik:</label>
+                <select name="user_id" id="user_select" class="form-control" onchange="this.form.submit()">
+                    {% for user in all_users %}
+                        <option value="{{ user.id }}" {% if user.id == selected_user_id %}selected{% endif %}>
+                            {{ user.name }} {{ user.surname }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="year_select">Rok:</label>
+                <select name="year" id="year_select" class="form-control" onchange="this.form.submit()">
+                    {% for year in available_years %}
+                        <option value="{{ year }}" {% if year == selected_year %}selected{% endif %}>
+                            {{ year }}
+                        </option>
+                    {% else %}
+                        <option value="{{ selected_year }}">{{ selected_year }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="month_select">Miesiąc:</label>
+                <select name="month" id="month_select" class="form-control" onchange="this.form.submit()">
+                    {% for month_num, month_name in available_months %}
+                        <option value="{{ month_num }}" {% if month_num == selected_month %}selected{% endif %}>
+                            {{ month_name }}
+                        </option>
+                    {% else %}
+                         <option value="{{ selected_month }}">{{ available_months[0][1] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </form>
+
+    <p>Raport dla: <strong>{{ report_data.user_name }} {{ report_data.user_surname }}</strong></p>
+
+    <div class="chart-container">
+        <canvas id="monthlyChart"></canvas>
+    </div>
+
+    <hr>
+    
+    <h3>Szczegółowe wpisy ({{ selected_year }}-{{ '%02d'|format(selected_month) }})</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Projekt</th>
+                <th>Data</th>
+                <th>Start</th>
+                <th>Koniec</th>
+                <th>Czas trwania</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in report_data.entries %}
+                <tr>
+                    <td>{{ entry.project_name }}</td>
+                    <td>{{ entry.date }}</td>
+                    <td>{{ entry.start }}</td>
+                    <td>{{ entry.end }}</td>
+                    <td>{{ entry.duration }}</td>
+                </tr>
+            {% else %}
+                <tr>
+                    <td colspan="5">Brak wpisów czasu pracy w wybranym miesiącu.</td>
+                </tr>
+            {% endfor %}
+            <tr style="background-color: #f2f2f2; font-weight: bold;">
+                 <td colspan="4">Łączny czas w wybranym miesiącu:</td>
+                 <td>{{ report_data.total_in_month }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <script>
+        const ctx = document.getElementById('monthlyChart').getContext('2d');
+        const chartData = {{ chart_data|tojson }};
+        
+        new Chart(ctx, {
+            type: 'bar',
+            data: chartData,
+            options: {
+                responsive: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Miesięczny skumulowany czas pracy (w godzinach)'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y + ' h';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true,
+                    },
+                    y: {
+                        stacked: true,
+                        title: {
+                            display: true,
+                            text: 'Godziny'
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+{% endblock %}
