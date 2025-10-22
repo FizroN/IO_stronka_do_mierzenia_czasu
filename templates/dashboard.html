@@ -1,35 +1,41 @@
 
 {% extends "layout.html" %}
 {% block content %}
-    <h2>Dashboard</h2>
+    <h2>Zaraportuj czas pracy</h2>
     
-    {% if active_project_name %}
-        <div class="flash success">
-            Obecnie pracujesz nad: <strong>{{ active_project_name }}</strong> (od {{ active_start_time.strftime('%H:%M:%S') }})
-        </div>
-    {% else %}
-        <div class="flash">Obecnie nie pracujesz.</div>
-    {% endif %}
-
-    <hr>
-
-    <h3>Rozpocznij / Zmień projekt</h3>
-    <form action="{{ url_for('start_work') }}" method="POST">
+    <form action="{{ url_for('add_time_entry') }}" method="POST">
         <div class="form-group">
-            <label for="project_id">Wybierz projekt:</label>
-            <select name="project_id" id="project_id" required>
-                {% for pid, p in projects.items() %}
-                    <option value="{{ pid }}">{{ p.name }}</option>
+            <label for="date">Data:</label>
+            <input type="date" id="date" name="date" required value="{{ today_date }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="start_time">Godzina rozpoczęcia:</label>
+            <input type="time" id="start_time" name="start_time" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="end_time">Godzina zakończenia:</label>
+            <input type="time" id="end_time" name="end_time" required>
+        </div>
+        
+        <hr>
+        
+        <div class="form-group">
+            <label for="project_select">Wybierz istniejący projekt:</label>
+            <select name="project_select" id="project_select">
+                <option value="">-- Wybierz --</option>
+                {% for project_name in projects %}
+                    <option value="{{ project_name }}">{{ project_name }}</option>
                 {% endfor %}
             </select>
         </div>
-        <button type="submit" class="btn">Start / Zmień Projekt</button>
+        
+        <div class="form-group">
+            <label for="project_new">...lub dodaj nowy projekt:</label>
+            <input type="text" id="project_new" name="project_new" placeholder="Np. Nowy Projekt Klienta X">
+        </div>
+        
+        <button type="submit" class="btn">Zapisz wpis czasu</button>
     </form>
-
-    {% if active_project_name %}
-        <hr>
-        <form action="{{ url_for('stop_work') }}" method="POST" style="margin-top: 20px;">
-            <button type="submit" class="btn btn-danger">Zatrzymaj pracę</button>
-        </form>
-    {% endif %}
 {% endblock %}

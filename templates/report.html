@@ -4,6 +4,13 @@
     <h2>Raport czasu pracy</h2>
     <p>Raport dla: <strong>{{ report_data.user_name }} {{ report_data.user_surname }}</strong></p>
 
+    <div class="chart-container">
+        <canvas id="monthlyChart"></canvas>
+    </div>
+
+    <hr>
+    
+    <h3>Szczegółowe wpisy</h3>
     <table>
         <thead>
             <tr>
@@ -34,4 +41,51 @@
             </tr>
         </tbody>
     </table>
+
+    <script>
+        const ctx = document.getElementById('monthlyChart').getContext('2d');
+        
+        // Dane wykresu przekazane z Flaska i bezpiecznie wstrzyknięte jako JSON
+        const chartData = {{ chart_data|tojson }};
+        
+        new Chart(ctx, {
+            type: 'bar',
+            data: chartData,
+            options: {
+                responsive: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Miesięczny skumulowany czas pracy (w godzinach)'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y + ' h';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true, // Kluczowe dla skumulowanego
+                    },
+                    y: {
+                        stacked: true, // Kluczowe dla skumulowanego
+                        title: {
+                            display: true,
+                            text: 'Godziny'
+                        }
+                    }
+                }
+            }
+        });
+    </script>
 {% endblock %}

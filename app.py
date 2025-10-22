@@ -3,14 +3,15 @@ import time
 from flask import Flask, render_template, redirect, url_for, request, flash, session
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # --- Definicje szablonów (aby wszystko było w 1 pliku) ---
 
 # Folder, w którym będą szablony
 TEMPLATE_DIR = 'templates'
 
-# Zawartość szablonu layout.html (baza)
+# ZAKTUALIZOWANA Zawartość szablonu layout.html (baza)
+# DODANO link do Chart.js w <head>
 LAYOUT_HTML = """
 <!doctype html>
 <html lang="pl">
@@ -18,6 +19,7 @@ LAYOUT_HTML = """
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <title>Time Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; background-color: #f4f4f4; margin: 0; padding: 20px; }
         .container { max-width: 900px; margin: 20px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
@@ -37,6 +39,8 @@ LAYOUT_HTML = """
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
         th { background-color: #f2f2f2; }
+        /* Styl dla kontenera wykresu */
+        .chart-container { width: 100%; margin: 25px 0; }
     </style>
 </head>
 <body>
@@ -66,7 +70,7 @@ LAYOUT_HTML = """
 </html>
 """
 
-# Zawartość szablonu login.html
+# Zawartość szablonu login.html (bez zmian)
 LOGIN_HTML = """
 {% extends "layout.html" %}
 {% block content %}
@@ -85,51 +89,65 @@ LOGIN_HTML = """
 {% endblock %}
 """
 
-# Zawartość szablonu dashboard.html
+# Zawartość szablonu dashboard.html (bez zmian)
 DASHBOARD_HTML = """
 {% extends "layout.html" %}
 {% block content %}
-    <h2>Dashboard</h2>
+    <h2>Zaraportuj czas pracy</h2>
     
-    {% if active_project_name %}
-        <div class="flash success">
-            Obecnie pracujesz nad: <strong>{{ active_project_name }}</strong> (od {{ active_start_time.strftime('%H:%M:%S') }})
-        </div>
-    {% else %}
-        <div class="flash">Obecnie nie pracujesz.</div>
-    {% endif %}
-
-    <hr>
-
-    <h3>Rozpocznij / Zmień projekt</h3>
-    <form action="{{ url_for('start_work') }}" method="POST">
+    <form action="{{ url_for('add_time_entry') }}" method="POST">
         <div class="form-group">
-            <label for="project_id">Wybierz projekt:</label>
-            <select name="project_id" id="project_id" required>
-                {% for pid, p in projects.items() %}
-                    <option value="{{ pid }}">{{ p.name }}</option>
+            <label for="date">Data:</label>
+            <input type="date" id="date" name="date" required value="{{ today_date }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="start_time">Godzina rozpoczęcia:</label>
+            <input type="time" id="start_time" name="start_time" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="end_time">Godzina zakończenia:</label>
+            <input type="time" id="end_time" name="end_time" required>
+        </div>
+        
+        <hr>
+        
+        <div class="form-group">
+            <label for="project_select">Wybierz istniejący projekt:</label>
+            <select name="project_select" id="project_select">
+                <option value="">-- Wybierz --</option>
+                {% for project_name in projects %}
+                    <option value="{{ project_name }}">{{ project_name }}</option>
                 {% endfor %}
             </select>
         </div>
-        <button type="submit" class="btn">Start / Zmień Projekt</button>
+        
+        <div class="form-group">
+            <label for="project_new">...lub dodaj nowy projekt:</label>
+            <input type="text" id="project_new" name="project_new" placeholder="Np. Nowy Projekt Klienta X">
+        </div>
+        
+        <button type="submit" class="btn">Zapisz wpis czasu</button>
     </form>
-
-    {% if active_project_name %}
-        <hr>
-        <form action="{{ url_for('stop_work') }}" method="POST" style="margin-top: 20px;">
-            <button type="submit" class="btn btn-danger">Zatrzymaj pracę</button>
-        </form>
-    {% endif %}
 {% endblock %}
 """
 
-# Zawartość szablonu report.html
+# ZAKTUALIZOWANA Zawartość szablonu report.html
+# DODANO <canvas> dla wykresu i blok <script> do jego renderowania
 REPORT_HTML = """
 {% extends "layout.html" %}
 {% block content %}
     <h2>Raport czasu pracy</h2>
     <p>Raport dla: <strong>{{ report_data.user_name }} {{ report_data.user_surname }}</strong></p>
 
+    <div class="chart-container">
+        <canvas id="monthlyChart"></canvas>
+    </div>
+
+    <hr>
+    
+    <h3>Szczegółowe wpisy</h3>
     <table>
         <thead>
             <tr>
@@ -160,6 +178,53 @@ REPORT_HTML = """
             </tr>
         </tbody>
     </table>
+
+    <script>
+        const ctx = document.getElementById('monthlyChart').getContext('2d');
+        
+        // Dane wykresu przekazane z Flaska i bezpiecznie wstrzyknięte jako JSON
+        const chartData = {{ chart_data|tojson }};
+        
+        new Chart(ctx, {
+            type: 'bar',
+            data: chartData,
+            options: {
+                responsive: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Miesięczny skumulowany czas pracy (w godzinach)'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y + ' h';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true, // Kluczowe dla skumulowanego
+                    },
+                    y: {
+                        stacked: true, // Kluczowe dla skumulowanego
+                        title: {
+                            display: true,
+                            text: 'Godziny'
+                        }
+                    }
+                }
+            }
+        });
+    </script>
 {% endblock %}
 """
 
@@ -178,10 +243,11 @@ def create_templates():
 
     for filename, content in templates_to_create.items():
         filepath = os.path.join(TEMPLATE_DIR, filename)
-        if not os.path.exists(filepath):
+        # Zawsze nadpisuj pliki layout i report, aby wprowadzić zmiany
+        if not os.path.exists(filepath) or filename in ['dashboard.html', 'layout.html', 'report.html']:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(content)
-            print(f"Utworzono plik szablonu: {filepath}")
+            print(f"Utworzono/Zaktualizowano plik szablonu: {filepath}")
 
 # --- Konfiguracja Aplikacji Flask ---
 app = Flask(__name__)
@@ -191,21 +257,21 @@ app.config['SECRET_KEY'] = 'bardzo-tajny-klucz-zmien-to-na-cos-innego'
 # --- Konfiguracja Flask-Login ---
 login_manager = LoginManager()
 login_manager.init_app(app)
-login_manager.login_view = 'login' # Gdzie przekierować niezalogowanych [cite: 6]
+login_manager.login_view = 'login' # Gdzie przekierować niezalogowanych
 login_manager.login_message = 'Musisz się zalogować, aby zobaczyć tę stronę.'
 login_manager.login_message_category = 'error'
 
 
 # --- Hardcoded Baza Danych (zgodnie z prośbą i dokumentacją) ---
 
-# Użytkownicy [cite: 2, 6, 9]
+# Użytkownicy
 # Hasło dla 'mateusz.wator' to 'superhaslo123'
 # Hasło dla 'jakub.zak' to 'haslo456'
 USERS_DB = {
     1: {
         "id": 1,
         "email": "mateusz.wator@timemasters.pl",
-        "password_hash": generate_password_hash("superhaslo123", method="pbkdf2:sha256"), # [cite: 6]
+        "password_hash": generate_password_hash("superhaslo123", method="pbkdf2:sha256"), #
         "name": "Mateusz",
         "surname": "Wątor",
         "role": "Pracownik"
@@ -213,30 +279,26 @@ USERS_DB = {
     2: {
         "id": 2,
         "email": "jakub.zak@timemasters.pl",
-        "password_hash": generate_password_hash("haslo456", method="pbkdf2:sha256"), # [cite: 6]
+        "password_hash": generate_password_hash("haslo456", method="pbkdf2:sha256"), #
         "name": "Jakub",
         "surname": "Żak",
         "role": "Pracownik"
     }
 }
 
-# Projekty [cite: 43]
-PROJECTS_DB = {
-    1: {"name": "Projekt Alfa"},
-    2: {"name": "Projekt Delta"},
-    3: {"name": "Zadania Wewnętrzne"}
+# ZMODYFIKOWANA BAZA PROJEKTÓW
+# Używamy zbioru (set) do przechowywania unikalnych nazw projektów
+# Można je dodawać dynamicznie
+PROJECTS_SET = {
+    "Projekt Alfa", 
+    "Projekt Delta", 
+    "Zadania Wewnętrzne"
 }
 
-# Wpisy czasu pracy (Time Entries) [cite: 9, 31, 97]
+# Wpisy czasu pracy (Time Entries)
 # Użyjemy listy, aby symulować bazę danych
 TIME_ENTRIES_DB = []
 _next_time_entry_id = 1 # Symulacja auto-inkrementacji ID
-
-# Aktywne sesje pracy (kto nad czym teraz pracuje) [cite: 7]
-# mapowanie: user_id -> time_entry_id
-# Zmieniamy na przechowywanie w sesji Flask, aby działało dla wielu użytkowników
-# Zamiast globalnego dict, użyjemy `session['active_entry_id']`
-
 
 # --- Model Użytkownika dla Flask-Login ---
 class User(UserMixin):
@@ -266,34 +328,10 @@ def load_user(user_id):
 
 # --- Funkcje pomocnicze ---
 
-def get_active_session_entry(user_id):
-    """Pobiera aktywny (niezakończony) wpis czasu dla użytkownika."""
-    active_entry_id = session.get('active_entry_id')
-    if active_entry_id:
-        for entry in TIME_ENTRIES_DB:
-            # Sprawdza ID, czy należy do usera i czy nie jest zakończony
-            if entry['id'] == active_entry_id and \
-               entry['user_id'] == user_id and \
-               entry['end_time'] is None:
-                return entry
-    return None
-
-def stop_active_session(user_id):
-    """Zatrzymuje aktywną sesję pracy dla użytkownika."""
-    active_entry = get_active_session_entry(user_id)
-    if active_entry:
-        active_entry['end_time'] = datetime.now(timezone.utc)
-        duration = active_entry['end_time'] - active_entry['start_time']
-        active_entry['duration_sec'] = int(duration.total_seconds()) # [cite: 33]
-        session.pop('active_entry_id', None) # Usuń z sesji
-        print(f"Zatrzymano sesję {active_entry['id']} dla użytkownika {user_id}")
-        return True
-    return False
-
 def format_duration(seconds):
     """Formatuje sekundy do czytelnego formatu H:M:S."""
     if seconds is None:
-        return "W trakcie"
+        return "N/A"
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
@@ -316,18 +354,17 @@ def login():
         email = request.form.get('email')
         password = request.form.get('password')
         
-        # Wyszukiwanie użytkownika po emailu [cite: 6, 88]
+        # Wyszukiwanie użytkownika po emailu
         user_data = None
         for uid, udata in USERS_DB.items():
             if udata['email'] == email:
                 user_data = udata
                 break
         
-        # Weryfikacja hasła [cite: 6, 89]
+        # Weryfikacja hasła
         if user_data and check_password_hash(user_data['password_hash'], password):
             user_obj = User.get(user_data['id'])
             login_user(user_obj)
-            session.pop('active_entry_id', None) # Wyczyść stan sesji po zalogowaniu
             print(f"Użytkownik {user_obj.email} zalogowany.")
             return redirect(url_for('dashboard'))
         else:
@@ -338,8 +375,6 @@ def login():
 @app.route('/logout')
 @login_required
 def logout():
-    # Zatrzymaj pracę przy wylogowaniu! [cite: 72]
-    stop_active_session(current_user.id)
     logout_user()
     session.clear() # Wyczyść całą sesję
     print("Użytkownik wylogowany.")
@@ -349,90 +384,108 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    active_entry = get_active_session_entry(current_user.id)
-    active_project_name = None
-    active_start_time = None
-    if active_entry:
-        active_project_name = PROJECTS_DB.get(active_entry['project_id'], {}).get('name', 'Nieznany Projekt')
-        active_start_time = active_entry['start_time'].replace(tzinfo=timezone.utc).astimezone(tz=None) # Konwersja na czas lokalny
-        
+    # Pobierz posortowaną listę projektów do wyświetlenia
+    projects_list = sorted(list(PROJECTS_SET))
+    # Ustaw domyślną datę na dzisiaj
+    today_date = datetime.now().strftime('%Y-%m-%d')
     return render_template('dashboard.html', 
-                           projects=PROJECTS_DB, 
-                           active_project_name=active_project_name,
-                           active_start_time=active_start_time)
+                           projects=projects_list,
+                           today_date=today_date)
 
-@app.route('/start_work', methods=['POST'])
+@app.route('/add_time_entry', methods=['POST'])
 @login_required
-def start_work():
-    # To obsługuje "Clock In" [cite: 23, 54] i "Switch Project" [cite: 24, 66]
+def add_time_entry():
     global _next_time_entry_id
-    project_id = request.form.get('project_id')
-    if not project_id:
-        flash("Musisz wybrać projekt.", 'error')
+    
+    # Pobranie danych z formularza
+    date_str = request.form.get('date')
+    start_str = request.form.get('start_time')
+    end_str = request.form.get('end_time')
+    existing_project = request.form.get('project_select')
+    new_project = request.form.get('project_new', '').strip()
+    
+    # Walidacja projektu
+    project_name = ""
+    if new_project:
+        project_name = new_project
+        if new_project not in PROJECTS_SET:
+            PROJECTS_SET.add(new_project)
+            print(f"Dodano nowy projekt: {new_project}")
+            flash(f"Dodano nowy projekt do listy: {new_project}", 'success')
+    elif existing_project:
+        project_name = existing_project
+    
+    if not project_name:
+        flash("Musisz wybrać istniejący projekt lub dodać nowy.", 'error')
         return redirect(url_for('dashboard'))
 
-    project_id = int(project_id)
-    project_name = PROJECTS_DB.get(project_id, {}).get('name', 'Nieznany')
-    
-    # Zgodnie z logiką[cite: 7]: rozpoczęcie innego kończy poprzedni.
-    if stop_active_session(current_user.id):
-        flash(f"Zakończono pracę nad poprzednim projektem.", 'success')
+    # Walidacja i parsowanie czasu
+    if not all([date_str, start_str, end_str]):
+        flash("Wszystkie pola czasu (data, start, koniec) są wymagane.", 'error')
+        return redirect(url_for('dashboard'))
 
-    # Rozpocznij nową sesję [cite: 61, 62]
+    try:
+        # Tworzymy obiekty datetime z podanych stringów
+        # Zakładamy, że użytkownik wprowadza czas lokalny
+        start_naive = datetime.fromisoformat(f"{date_str}T{start_str}")
+        end_naive = datetime.fromisoformat(f"{date_str}T{end_str}")
+
+        # Konwertujemy czas lokalny na UTC do zapisu w bazie
+        # .astimezone() bez argumentu dodaje lokalną strefę czasową
+        start_utc = start_naive.astimezone().astimezone(timezone.utc)
+        end_utc = end_naive.astimezone().astimezone(timezone.utc)
+
+        if end_utc <= start_utc:
+            flash("Godzina zakończenia musi być późniejsza niż godzina rozpoczęcia.", 'error')
+            return redirect(url_for('dashboard'))
+        
+        duration = end_utc - start_utc
+        duration_sec = int(duration.total_seconds())
+
+    except ValueError:
+        flash("Nieprawidłowy format daty lub godziny.", 'error')
+        return redirect(url_for('dashboard'))
+
+    # Zapis do "bazy danych"
     new_entry = {
         "id": _next_time_entry_id,
         "user_id": current_user.id,
-        "project_id": project_id,
-        "start_time": datetime.now(timezone.utc), # [cite: 9]
-        "end_time": None, # [cite: 9]
-        "duration_sec": None # [cite: 33]
+        "project_name": project_name, # Przechowujemy nazwę
+        "start_time": start_utc,     # Zapisujemy w UTC
+        "end_time": end_utc,         # Zapisujemy w UTC
+        "duration_sec": duration_sec
     }
     TIME_ENTRIES_DB.append(new_entry)
-    session['active_entry_id'] = new_entry['id'] # Zapisz w sesji
     _next_time_entry_id += 1
 
-    print(f"Rozpoczęto sesję {new_entry['id']} dla użytkownika {current_user.id} na projekcie {project_id}")
-    flash(f"Rozpocząłeś pracę nad projektem: {project_name}", 'success')
-
+    print(f"Dodano wpis {new_entry['id']} dla {current_user.email}: {project_name}, {format_duration(duration_sec)}")
+    flash(f"Pomyślnie dodano wpis czasu pracy ({format_duration(duration_sec)}).", 'success')
     return redirect(url_for('dashboard'))
 
-@app.route('/stop_work', methods=['POST'])
-@login_required
-def stop_work():
-    # To obsługuje "Stop Working" [cite: 25, 72, 74]
-    if stop_active_session(current_user.id):
-        flash("Zatrzymałeś pracę.", 'success')
-    else:
-        flash("Nie pracowałeś nad żadnym projektem.", 'error')
-        
-    return redirect(url_for('dashboard'))
 
+# ZAKTUALIZOWANA trasa /report
 @app.route('/report')
 @login_required
 def report():
-    # Generowanie raportu on-demand [cite: 6, 20, 98]
+    # --- 1. Przygotowanie danych do tabeli (jak wcześniej) ---
     user_entries = []
     total_today_sec = 0
-    today = datetime.now(timezone.utc).date()
+    today_local = datetime.now().date() # Dzień w lokalnej strefie czasowej
 
     for entry in TIME_ENTRIES_DB:
         if entry['user_id'] == current_user.id:
-            project_name = PROJECTS_DB.get(entry['project_id'], {}).get('name', 'Nieznany')
-            
-            # Konwersja czasów UTC na lokalne dla wyświetlenia
+            project_name = entry.get('project_name', 'Nieznany')
             start_local = entry['start_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
             
             if entry['end_time']:
                 end_local = entry['end_time'].replace(tzinfo=timezone.utc).astimezone(tz=None)
                 end_str = end_local.strftime('%H:%M:%S')
             else:
-                end_str = "W trakcie"
+                end_str = "N/A"
 
-            # Sumowanie czasu pracy z dzisiaj
-            if entry['duration_sec'] and start_local.date() == today:
+            if entry['duration_sec'] and start_local.date() == today_local:
                  total_today_sec += entry['duration_sec']
             
-            # Formatowanie na potrzeby raportu
             formatted_entry = {
                 'project_name': project_name,
                 'date': start_local.strftime('%Y-%m-%d'),
@@ -442,15 +495,92 @@ def report():
             }
             user_entries.append(formatted_entry)
     
-    # Dane użytkownika do raportu [cite: 6, 21]
     report_data = {
         'user_name': current_user.name,
         'user_surname': current_user.surname,
-        'entries': sorted(user_entries, key=lambda x: (x['date'], x['start']), reverse=True), # Sortuj od najnowszych
-        'total_today': format_duration(total_today_sec) # [cite: 76]
+        'entries': sorted(user_entries, key=lambda x: (x['date'], x['start']), reverse=True),
+        'total_today': format_duration(total_today_sec)
     }
+
+    # --- 2. Przygotowanie danych do wykresu miesięcznego ---
     
-    return render_template('report.html', report_data=report_data)
+    # Etykiety: Dni od 1 do dzisiaj w bieżącym miesiącu (w strefie lokalnej)
+    today = datetime.now().date()
+    first_day_of_month = today.replace(day=1)
+    num_days_so_far = (today - first_day_of_month).days + 1
+    
+    # `date_labels` to etykiety dla osi X (np. "Oct 01")
+    # `date_keys` to klucze do wyszukiwania danych (np. "2025-10-01")
+    date_labels = []
+    date_keys = []
+    for i in range(num_days_so_far):
+        current_day = first_day_of_month + timedelta(days=i)
+        date_labels.append(current_day.strftime('%b %d'))
+        date_keys.append(current_day.strftime('%Y-%m-%d'))
+        
+    # Agregacja danych: { '2025-10-22': {'Projekt A': 3600, 'Projekt B': 1800}, ... }
+    daily_project_summary = {}
+    all_projects_in_month = set()
+    
+    # Używamy UTC do filtrowania miesiąca/roku, aby być spójnym z bazą
+    now_utc = datetime.now(timezone.utc)
+    current_month_utc = now_utc.month
+    current_year_utc = now_utc.year
+    
+    for entry in TIME_ENTRIES_DB:
+        # Filtruj wpisy: tylko bieżący użytkownik i bieżący miesiąc/rok (wg UTC)
+        if (entry['user_id'] == current_user.id and
+            entry['start_time'].year == current_year_utc and
+            entry['start_time'].month == current_month_utc):
+            
+            # Klucz daty bierzemy z czasu lokalnego, aby pasował do osi X
+            local_date_str = entry['start_time'].astimezone(tz=None).strftime('%Y-%m-%d')
+            project = entry['project_name']
+            duration = entry['duration_sec']
+            
+            all_projects_in_month.add(project)
+            
+            if local_date_str not in daily_project_summary:
+                daily_project_summary[local_date_str] = {}
+            if project not in daily_project_summary[local_date_str]:
+                daily_project_summary[local_date_str][project] = 0
+                
+            daily_project_summary[local_date_str][project] += duration
+
+    # Budowanie zestawów danych (dataset) dla Chart.js
+    chart_datasets = []
+    # Kolory dla kolejnych projektów
+    colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#E7E9ED']
+
+    for i, project_name in enumerate(sorted(list(all_projects_in_month))):
+        color = colors[i % len(colors)]
+        data_list = []
+        
+        # Dla każdego dnia na osi X...
+        for date_key in date_keys:
+            # ...znajdź dane dla tego dnia...
+            day_data = daily_project_summary.get(date_key, {})
+            # ...i dla tego konkretnego projektu (domyślnie 0)
+            project_seconds = day_data.get(project_name, 0)
+            # Konwertuj na godziny
+            project_hours = round(project_seconds / 3600, 2)
+            data_list.append(project_hours)
+            
+        chart_datasets.append({
+            'label': project_name,
+            'data': data_list,
+            'backgroundColor': color
+        })
+    
+    chart_data = {
+        'labels': date_labels,
+        'datasets': chart_datasets
+    }
+
+    # --- 3. Renderowanie szablonu z oboma zestawami danych ---
+    return render_template('report.html', 
+                           report_data=report_data, 
+                           chart_data=chart_data)
 
 # Dodanie filtra Jinja2 do szablonów
 @app.template_filter('format_duration')
@@ -464,7 +594,8 @@ if __name__ == '__main__':
     
     print("="*50)
     print("Aplikacja Time Tracker jest gotowa.")
-    print("Utworzono pliki szablonów w folderze 'templates'.")
+    print("ZAKTUALIZOWANO: Dodano miesięczny wykres kolumnowy do raportu.")
+    print("Pliki szablonów 'layout.html' i 'report.html' zostały zaktualizowane.")
     print("Uruchamianie serwera Flask pod adresem: http://127.0.0.1:5000")
     print("Aby się zalogować, użyj:")
     print("  Email: mateusz.wator@timemasters.pl")
