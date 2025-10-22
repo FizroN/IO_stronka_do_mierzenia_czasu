@@ -536,7 +536,7 @@ def verify_email(token):
         db.session.commit()
         
         login_user(user)
-        session.clear()
+        #session.clear()
         
         flash('Twoje konto zostało pomyślnie aktywowane! Jesteś zalogowany.', 'success')
         return redirect(url_for('dashboard'))
