@@ -1,0 +1,37 @@
+
+{% extends "layout.html" %}
+{% block content %}
+    <h2>Raport czasu pracy</h2>
+    <p>Raport dla: <strong>{{ report_data.user_name }} {{ report_data.user_surname }}</strong></p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Projekt</th>
+                <th>Data</th>
+                <th>Start</th>
+                <th>Koniec</th>
+                <th>Czas trwania</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in report_data.entries %}
+                <tr>
+                    <td>{{ entry.project_name }}</td>
+                    <td>{{ entry.date }}</td>
+                    <td>{{ entry.start }}</td>
+                    <td>{{ entry.end }}</td>
+                    <td>{{ entry.duration }}</td>
+                </tr>
+            {% else %}
+                <tr>
+                    <td colspan="5">Brak wpisów czasu pracy.</td>
+                </tr>
+            {% endfor %}
+            <tr style="background-color: #f2f2f2; font-weight: bold;">
+                 <td colspan="4">Łączny czas dzisiaj:</td>
+                 <td>{{ report_data.total_today }}</td>
+            </tr>
+        </tbody>
+    </table>
+{% endblock %}
