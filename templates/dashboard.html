@@ -2,41 +2,33 @@
 {% extends "layout.html" %}
 {% block content %}
     <h2>Zaraportuj czas pracy</h2>
-    
     <form action="{{ url_for('add_time_entry') }}" method="POST">
         <div class="form-group">
             <label for="date">Data:</label>
             <input type="date" id="date" name="date" required value="{{ today_date }}">
         </div>
-        
         <div class="form-group">
             <label for="start_time">Godzina rozpoczęcia:</label>
             <input type="time" id="start_time" name="start_time" required>
         </div>
-        
         <div class="form-group">
             <label for="end_time">Godzina zakończenia:</label>
             <input type="time" id="end_time" name="end_time" required>
         </div>
-        
         <hr>
-        
         <div class="form-group">
             <label for="project_select">Wybierz istniejący projekt:</label>
             <select name="project_select" id="project_select">
                 <option value="">-- Wybierz --</option>
-                <!-- ZMIANA: Iterujemy po obiektach Project -->
                 {% for project in projects %}
                     <option value="{{ project.name }}">{{ project.name }}</option>
                 {% endfor %}
             </select>
         </div>
-        
         <div class="form-group">
             <label for="project_new">...lub dodaj nowy projekt:</label>
             <input type="text" id="project_new" name="project_new" placeholder="Np. Nowy Projekt Klienta X">
         </div>
-        
         <button type="submit" class="btn">Zapisz wpis czasu</button>
     </form>
 {% endblock %}

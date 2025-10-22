@@ -2,13 +2,11 @@
 {% extends "layout.html" %}
 {% block content %}
     <h2>Raport czasu pracy</h2>
-
     <form method="GET" action="{{ url_for('report') }}">
         <div class="report-filters">
             <div class="form-group">
                 <label for="user_select">Użytkownik:</label>
                 <select name="user_id" id="user_select" class="form-control" onchange="this.form.submit()">
-                    <!-- ZMIANA: Iterujemy po obiektach User -->
                     {% for user in all_users %}
                         <option value="{{ user.id }}" {% if user.id == selected_user_id %}selected{% endif %}>
                             {{ user.name }} {{ user.surname }}
@@ -16,7 +14,6 @@
                     {% endfor %}
                 </select>
             </div>
-            
             <div class="form-group">
                 <label for="year_select">Rok:</label>
                 <select name="year" id="year_select" class="form-control" onchange="this.form.submit()">
@@ -29,7 +26,6 @@
                     {% endfor %}
                 </select>
             </div>
-            
             <div class="form-group">
                 <label for="month_select">Miesiąc:</label>
                 <select name="month" id="month_select" class="form-control" onchange="this.form.submit()">
@@ -44,15 +40,11 @@
             </div>
         </div>
     </form>
-
     <p>Raport dla: <strong>{{ report_data.user_name }} {{ report_data.user_surname }}</strong></p>
-
     <div class="chart-container">
         <canvas id="monthlyChart"></canvas>
     </div>
-
     <hr>
-    
     <h3>Szczegółowe wpisy ({{ selected_year }}-{{ '%02d'|format(selected_month) }})</h3>
     <table>
         <thead>
@@ -84,47 +76,30 @@
             </tr>
         </tbody>
     </table>
-
     <script>
         const ctx = document.getElementById('monthlyChart').getContext('2d');
         const chartData = {{ chart_data|tojson }};
-        
         new Chart(ctx, {
             type: 'bar',
             data: chartData,
             options: {
                 responsive: true,
                 plugins: {
-                    title: {
-                        display: true,
-                        text: 'Miesięczny skumulowany czas pracy (w godzinach)'
-                    },
+                    title: { display: true, text: 'Miesięczny skumulowany czas pracy (w godzinach)' },
                     tooltip: {
                         callbacks: {
                             label: function(context) {
                                 let label = context.dataset.label || '';
-                                if (label) {
-                                    label += ': ';
-                                }
-                                if (context.parsed.y !== null) {
-                                    label += context.parsed.y + ' h';
-                                }
+                                if (label) { label += ': '; }
+                                if (context.parsed.y !== null) { label += context.parsed.y + ' h'; }
                                 return label;
                             }
                         }
                     }
                 },
                 scales: {
-                    x: {
-                        stacked: true,
-                    },
-                    y: {
-                        stacked: true,
-                        title: {
-                            display: true,
-                            text: 'Godziny'
-                        }
-                    }
+                    x: { stacked: true },
+                    y: { stacked: true, title: { display: true, text: 'Godziny' } }
                 }
             }
         });

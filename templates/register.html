@@ -1,0 +1,21 @@
+
+{% extends "layout.html" %}
+{% block content %}
+    <h2>Rejestracja</h2>
+    <p>Podaj swój adres e-mail, aby rozpocząć proces rejestracji.</p>
+    <form method="POST" action="{{ url_for('register') }}">
+        <div class="form-group">
+            <label for="email">E-mail</label>
+            <input type="email" id="email" name="email" required>
+        </div>
+        <div class="form-group">
+            <label for="name">Imię</label>
+            <input type="text" id="name" name="name" required>
+        </div>
+        <div class="form-group">
+            <label for="surname">Nazwisko</label>
+            <input type="text" id="surname" name="surname" required>
+        </div>
+        <button type="submit" class="btn">Zarejestruj</button>
+    </form>
+{% endblock %}
